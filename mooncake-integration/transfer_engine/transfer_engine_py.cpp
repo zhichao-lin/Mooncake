@@ -21,6 +21,10 @@
 #include <pybind11/stl.h>
 #include "transport/rpc_communicator/rpc_interface.h"
 
+#ifdef USE_ASCEND_DIRECT
+#include "transport/ascend_transport/ascend_direct_transport/ascend_direct_transport.h"
+#endif
+
 #ifdef USE_MNNVL
 #include "transport/nvlink_transport/nvlink_transport.h"
 #endif
@@ -96,6 +100,26 @@ TransferEnginePy::~TransferEnginePy() {
     buffer_list_.clear();
     for (auto &buffer : large_buffer_list_) freeMemory(buffer);
     large_buffer_list_.clear();
+}
+
+int TransferEnginePy::disconnectAllPeers() {
+#ifdef USE_ASCEND_DIRECT
+    if (!engine_) {
+        LOG(ERROR) << "Transfer engine is not initialized";
+        return -1;
+    }
+    Transport *base_transport = engine_->getTransport("ascend");
+    if (base_transport == nullptr) {
+        LOG(ERROR) << "Ascend transport is not installed";
+        return -1;
+    }
+    auto *transport = static_cast<AscendDirectTransport *>(base_transport);
+    pybind11::gil_scoped_release release;
+    return transport->disconnectAllPeers();
+#else
+    LOG(ERROR) << "Mooncake was built without Ascend Direct transport";
+    return -1;
+#endif
 }
 
 std::vector<std::string> buildDeviceFilter(const std::string &device_names) {
@@ -1017,6 +1041,8 @@ PYBIND11_MODULE(engine, m) {
                  &TransferEnginePy::batchRegisterMemory)
             .def("batch_unregister_memory",
                  &TransferEnginePy::batchUnregisterMemory)
+            .def("disconnect_all_peers",
+                 &TransferEnginePy::disconnectAllPeers)
             .def("get_local_topology", &TransferEnginePy::getLocalTopology,
                  py::arg("device_name") = nullptr)
             .def("get_first_buffer_address",

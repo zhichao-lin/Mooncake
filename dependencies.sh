@@ -246,7 +246,7 @@ install_go() {
     fi
     # Download Go
     echo "Downloading Go $GOVER..."
-    wget -q --show-progress https://go.dev/dl/go$GOVER.linux-$ARCH.tar.gz
+    wget -q --show-progress https://mirrors.aliyun.com/golang/go$GOVER.linux-$ARCH.tar.gz
     check_success "Failed to download Go $GOVER"
 
     # Install Go

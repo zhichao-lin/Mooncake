@@ -74,6 +74,8 @@ class AscendDirectTransport : public Transport {
     int unregisterLocalMemoryBatch(
         const std::vector<void *> &addr_list) override;
 
+    int disconnectAllPeers();
+
    private:
     int allocateLocalSegmentID();
 
@@ -130,6 +132,10 @@ class AscendDirectTransport : public Transport {
     // Connection management for segment connections
     std::set<std::string> connected_segments_;
     std::mutex connection_mutex_;
+    std::mutex transfer_lifecycle_mutex_;
+    std::condition_variable transfer_lifecycle_cv_;
+    size_t active_sync_transfers_{0};
+    bool disconnecting_all_peers_{false};
 
     int32_t device_logic_id_{};
     aclrtContext rt_context_{nullptr};

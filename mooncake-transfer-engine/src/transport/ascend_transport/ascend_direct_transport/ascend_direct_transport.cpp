@@ -816,12 +816,27 @@ void AscendDirectTransport::processSliceList(
 void AscendDirectTransport::connectAndTransfer(
     const std::string &target_adxl_engine_name, adxl::TransferOp operation,
     const std::vector<Slice *> &slice_list, int32_t times) {
+    {
+        std::unique_lock<std::mutex> lock(transfer_lifecycle_mutex_);
+        transfer_lifecycle_cv_.wait(
+            lock, [this] { return !disconnecting_all_peers_; });
+        ++active_sync_transfers_;
+    }
+    const auto finish_transfer = [this] {
+        {
+            std::lock_guard<std::mutex> lock(transfer_lifecycle_mutex_);
+            --active_sync_transfers_;
+        }
+        transfer_lifecycle_cv_.notify_all();
+    };
+
     if (!auto_connect_) {
         int ret = checkAndConnect(target_adxl_engine_name);
         if (ret != 0) {
             for (auto &slice : slice_list) {
                 slice->markFailed();
             }
+            finish_transfer();
             return;
         }
     }
@@ -837,8 +852,10 @@ void AscendDirectTransport::connectAndTransfer(
         op_descs.emplace_back(op_desc);
     }
     if (use_async_transfer_) {
-        return TransferWithAsync(target_adxl_engine_name, operation, slice_list,
-                                 op_descs);
+        TransferWithAsync(target_adxl_engine_name, operation, slice_list,
+                          op_descs);
+        finish_transfer();
+        return;
     }
     auto status = adxl_->TransferSync(target_adxl_engine_name.c_str(),
                                       operation, op_descs, transfer_timeout_);
@@ -873,6 +890,7 @@ void AscendDirectTransport::connectAndTransfer(
         disconnect(target_adxl_engine_name, kDefaultDisconnectTime);
         need_update_metadata_segs_.emplace(slice_list[0]->target_id);
     }
+    finish_transfer();
 }
 
 void AscendDirectTransport::TransferWithAsync(
@@ -1176,11 +1194,54 @@ int AscendDirectTransport::disconnect(
         if (status != adxl::SUCCESS) {
             LOG(ERROR) << "Failed to disconnect to: " << target_adxl_engine_name
                        << ", status: " << status;
-            connected_segments_.erase(target_adxl_engine_name);
             return -1;
         }
     }
     connected_segments_.erase(target_adxl_engine_name);
     return 0;
+}
+
+int AscendDirectTransport::disconnectAllPeers() {
+    if (auto_connect_) {
+        LOG(ERROR) << "disconnectAllPeers does not support ASCEND_AUTO_CONNECT";
+        return -1;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(transfer_lifecycle_mutex_);
+        disconnecting_all_peers_ = true;
+        transfer_lifecycle_cv_.wait(
+            lock, [this] { return active_sync_transfers_ == 0; });
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(async_task_mutex_);
+        async_task_cv_.wait(
+            lock, [this] { return active_async_tasks_ == 0; });
+    }
+
+    int result = 0;
+    {
+        std::lock_guard<std::mutex> lock(connection_mutex_);
+        for (auto it = connected_segments_.begin();
+             it != connected_segments_.end();) {
+            auto status = adxl_->Disconnect(it->c_str(), connect_timeout_);
+            if (status != adxl::SUCCESS) {
+                LOG(ERROR) << "Failed to disconnect AdxlEngine:" << *it
+                           << ", status:" << status;
+                result = -1;
+                ++it;
+            } else {
+                it = connected_segments_.erase(it);
+            }
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(transfer_lifecycle_mutex_);
+        disconnecting_all_peers_ = false;
+    }
+    transfer_lifecycle_cv_.notify_all();
+    return result;
 }
 }  // namespace mooncake

@@ -164,4 +164,8 @@ endif()
 if (WITH_TE)
     install(TARGETS engine DESTINATION ${PYTHON_SYS_PATH}/${PYTHON_PACKAGE_NAME})
     install(TARGETS asio_shared DESTINATION ${PYTHON_SYS_PATH}/${PYTHON_PACKAGE_NAME})
+    if (USE_ASCEND_DIRECT)
+        install(FILES $<TARGET_FILE:ascend_transport>
+                DESTINATION ${PYTHON_SYS_PATH}/${PYTHON_PACKAGE_NAME})
+    endif()
 endif()
